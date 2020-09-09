@@ -5,18 +5,19 @@ The code is based on the sample code with tensorflow for 2020 NIAC and it can on
 If you have any questions, please contact me with https://github.com/xufana7/AutoEncoder-with-pytorch
 Author, Fan xu Aug 2020
 """
-import numpy as np
-import h5py
-import torch
-from Model_define_pytorch import AutoEncoder, DatasetFolder
 import os
+
+import h5py
+import numpy as np
+import torch
 import torch.nn as nn
+from Model_define_pytorch import AutoEncoder, DatasetFolder
 
 # Parameters for training
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 use_single_gpu = True  # select whether using single gpu or multiple gpus
 torch.manual_seed(1)
-batch_size = 512
+batch_size = 4096
 epochs = 1000
 learning_rate = 1e-3
 num_workers = 4
@@ -40,6 +41,7 @@ criterion = nn.MSELoss().cuda()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
 # Data loading
+print('Loading training data ...')
 data_load_address = './data'
 mat = h5py.File(data_load_address + '/H_train.mat', 'r')
 data = np.transpose(mat['H_train'])  # shape=(320000, 1024)
@@ -54,7 +56,7 @@ train_dataset = DatasetFolder(x_train)
 train_loader = torch.utils.data.DataLoader(
     train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
 
-# dataLoader for training
+# dataLoader for testing
 test_dataset = DatasetFolder(x_test)
 test_loader = torch.utils.data.DataLoader(
     test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
@@ -78,7 +80,7 @@ for epoch in range(epochs):
         if i % print_freq == 0:
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Loss {loss:.4f}\t'.format(
-                epoch, i, len(train_loader), loss=loss.item()))
+                      epoch, i, len(train_loader), loss=loss.item()))
     # model evaluating
     model.eval()
     total_loss = 0
@@ -92,9 +94,11 @@ for epoch in range(epochs):
             # model save
             # save encoder
             modelSave1 = './Modelsave/encoder.pth.tar'
-            torch.save({'state_dict': model.encoder.state_dict(), }, modelSave1)
+            torch.save(
+                {'state_dict': model.encoder.state_dict(), }, modelSave1)
             # save decoder
             modelSave2 = './Modelsave/decoder.pth.tar'
-            torch.save({'state_dict': model.decoder.state_dict(), }, modelSave2)
+            torch.save(
+                {'state_dict': model.decoder.state_dict(), }, modelSave2)
             print("Model saved")
             best_loss = average_loss
