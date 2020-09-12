@@ -31,7 +31,7 @@ def Num2Bit(Num, B):
 
 def Bit2Num(Bit, B):
     Bit_ = Bit.type(torch.float32)
-    Bit_ = torch.reshape(Bit_, [-1, int(Bit_.shape[1] / B), B])
+    Bit_ = torch.reshape(Bit_, [-1, Bit_.shape[1] // B, B])
     num = torch.zeros(Bit_[:, :, 1].shape).cuda()
     for i in range(B):
         num = num + Bit_[:, :, i] * 2 ** (B - 1 - i)
