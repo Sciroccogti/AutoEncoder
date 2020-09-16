@@ -101,8 +101,30 @@ class DequantizationLayer(nn.Module):
 
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=1, bias=True)
+    return conv2dSame(in_planes, out_planes, 3)
+    # return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
+    #                  padding=1, bias=True)
+
+
+def conv8x8(in_planes, out_planes, stride=1):
+    """8x8 convolution with padding"""
+    return conv2dSame(in_planes, out_planes, 8)
+    # return conv2d_same_padding(in_planes, out_planes, stride=stride)
+
+
+def conv2dSame(in_channels, out_channels, kernel_size, bias=True):
+    # https://github.com/pytorch/pytorch/issues/3867#issuecomment-407663012
+    ka = kernel_size // 2
+    kb = ka - 1 if kernel_size % 2 == 0 else ka
+    return torch.nn.Sequential(
+        torch.nn.ReflectionPad2d((ka, kb, ka, kb)),
+        torch.nn.Conv2d(in_channels, out_channels, kernel_size, bias=bias)
+    )
+
+
+# c = Conv2dSame(1, 3, 5)
+# print(c(torch.rand((16, 1, 10, 10))).shape)
+# torch.Size([16, 3, 10, 10])
 
 
 class Encoder(nn.Module):
@@ -110,17 +132,25 @@ class Encoder(nn.Module):
 
     def __init__(self, feedback_bits):
         super(Encoder, self).__init__()
-        self.conv1 = conv3x3(2, 2)
-        self.conv2 = conv3x3(2, 2)
-        self.fc = nn.Linear(1024, int(feedback_bits / self.B))
+        self.conv1 = conv8x8(2, 18)
+        self.conv2 = conv8x8(18, 18)
+        self.conv3 = conv8x8(18, 18)
+        self.conv4 = conv8x8(18, 18)
+        self.conv5 = conv8x8(18, 18)
+        self.fc1 = nn.Linear(1024, 256)
+        self.fc2 = nn.Linear(256, int(feedback_bits / self.B))
         self.sig = nn.Sigmoid()
         self.quantize = QuantizationLayer(self.B)
 
     def forward(self, x):
-        out = F.relu(self.conv1(x))
-        out = F.relu(self.conv2(out))
+        out = F.relu(self.conv1(x))   # x  4096 2  16 32
+        out = F.relu(self.conv2(out))  # in 4096 18 11 27
+        out = F.relu(self.conv3(out))  # in 4096 18 6  22
+        out = F.relu(self.conv4(out))  # in 4096 18 1  17
+        out = F.relu(self.conv5(out))
         out = out.view(-1, 1024)
-        out = self.fc(out)
+        out = self.fc1(out)
+        out = self.fc2(out)
         out = self.sig(out)
         out = self.quantize(out)
 
@@ -135,25 +165,30 @@ class Decoder(nn.Module):
         self.feedback_bits = feedback_bits
         self.dequantize = DequantizationLayer(self.B)
         self.multiConvs = nn.ModuleList()
-        self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
+        self.fc1 = nn.Linear(int(feedback_bits / self.B), 256)
+        self.fc2 = nn.Linear(256, 64)
+        self.fc3 = nn.Linear(64, 1024*64)
         self.out_cov = conv3x3(2, 2)
-        self.sig = nn.Sigmoid()
+        # self.sig = nn.Sigmoid()
+        self.relu = nn.ReLU()
 
-        for _ in range(3):
+        for _ in range(5):
             self.multiConvs.append(nn.Sequential(
-                conv3x3(2, 8),
+                conv3x3(2, 384),
                 nn.ReLU(),
-                conv3x3(8, 16),
+                conv3x3(384, 256),
                 nn.ReLU(),
-                conv3x3(16, 2),
+                conv3x3(256, 128),
                 nn.ReLU()))
 
     def forward(self, x):
         out = self.dequantize(x)
         out = out.view(-1, int(self.feedback_bits / self.B))
-        out = self.sig(self.fc(out))
-        out = out.view(-1, 2, 16, 32)
-        for i in range(3):
+        out = self.relu(self.fc1(out))
+        out = self.relu(self.fc2(out))
+        out = self.relu(self.fc3(out))
+        out = out.view(-1, 2*64, 16, 32)
+        for i in range(5):
             residual = out
             out = self.multiConvs[i](out)
             out = residual + out
