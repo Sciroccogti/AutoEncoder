@@ -136,14 +136,14 @@ class Encoder(nn.Module):
         self.conv2 = conv8x8(18, 18)
         self.conv3 = conv8x8(18, 18)
         self.conv4 = conv8x8(18, 18)
-        self.conv5 = conv8x8(18, 18)
+        self.conv5 = conv8x8(18, 2)
         self.fc1 = nn.Linear(1024, 256)
         self.fc2 = nn.Linear(256, int(feedback_bits / self.B))
         self.sig = nn.Sigmoid()
         self.quantize = QuantizationLayer(self.B)
 
     def forward(self, x):
-        out = F.relu(self.conv1(x))   # x  4096 2  16 32
+        out = F.relu(self.conv1(x))    # x  4096 2  16 32
         out = F.relu(self.conv2(out))  # in 4096 18 11 27
         out = F.relu(self.conv3(out))  # in 4096 18 6  22
         out = F.relu(self.conv4(out))  # in 4096 18 1  17
@@ -168,13 +168,13 @@ class Decoder(nn.Module):
         self.fc1 = nn.Linear(int(feedback_bits / self.B), 256)
         self.fc2 = nn.Linear(256, 64)
         self.fc3 = nn.Linear(64, 1024*64)
-        self.out_cov = conv3x3(2, 2)
-        # self.sig = nn.Sigmoid()
+        self.out_cov = conv3x3(128, 2)
+        self.sig = nn.Sigmoid()
         self.relu = nn.ReLU()
 
         for _ in range(5):
             self.multiConvs.append(nn.Sequential(
-                conv3x3(2, 384),
+                conv3x3(128, 384),
                 nn.ReLU(),
                 conv3x3(384, 256),
                 nn.ReLU(),
@@ -186,7 +186,7 @@ class Decoder(nn.Module):
         out = out.view(-1, int(self.feedback_bits / self.B))
         out = self.relu(self.fc1(out))
         out = self.relu(self.fc2(out))
-        out = self.relu(self.fc3(out))
+        out = self.fc3(out)
         out = out.view(-1, 2*64, 16, 32)
         for i in range(5):
             residual = out
