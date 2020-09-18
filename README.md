@@ -5,9 +5,9 @@
 - numpy
 - h5py
 
-## result
+<!-- ## result
 
-test score = 0.67
+test score = 0.67 -->
 
 ## 原理
 
@@ -41,3 +41,26 @@ test score = 0.67
 尽管使用了噪声层来对噪声建模，但由于噪声是加性且与输入无关，因此梯度不受噪声影响。
 
 在训练时，每个训练样本都以随机比特的形式生成。
+
+## 结构
+
+Type of layer|Kernel size/Annotation|Output size
+|---|---|---|
+Input|Input layer|K × 1
+Conv+Relu|5|K × 256
+Conv+Relu|5|K × 128
+Conv+Relu|5|K × 64
+Conv|3|K × 2
+Normalization|Power normalization|K × 2
+Noise|Additive noise|K × 2
+Conv+Relu|5|K × 256
+Conv+Relu|3|K × 128
+Conv+Relu|3|K × 128
+Conv+Relu|3|K × 128
+Conv+Relu|3|K × 64
+Conv+Relu|3|K × 64
+Conv+Relu|3|K × 64
+Conv+Relu|3|K × 32
+Conv+Relu|3|K × 32
+Conv+Relu|3|K × 32
+Conv+Sigmoid|3|K × 1
