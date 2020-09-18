@@ -105,23 +105,29 @@ def conv3x3(in_planes, out_planes, stride=1):
                      padding=1, bias=True)
 
 
+def conv5x5(in_planes, out_planes, stride=1):
+    """5x5 convolution with padding"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=5, stride=stride,
+                     padding=2, bias=True)
+
+
 class Encoder(nn.Module):
     B = 4
 
     def __init__(self, feedback_bits):
         super(Encoder, self).__init__()
-        self.conv1 = conv3x3(2, 2)
-        self.conv2 = conv3x3(2, 2)
-        self.fc = nn.Linear(1024, int(feedback_bits / self.B))
-        self.sig = nn.Sigmoid()
+        self.conv1 = conv5x5(2, 256)
+        self.conv2 = conv5x5(256, 128)
+        self.conv3 = conv5x5(128, 64)
+        self.conv4 = conv3x3(64, 2)
         self.quantize = QuantizationLayer(self.B)
 
     def forward(self, x):
         out = F.relu(self.conv1(x))
         out = F.relu(self.conv2(out))
+        out = F.relu(self.conv3(out))
+        out = self.conv4(out)
         out = out.view(-1, 1024)
-        out = self.fc(out)
-        out = self.sig(out)
         out = self.quantize(out)
 
         return out
@@ -134,29 +140,42 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.feedback_bits = feedback_bits
         self.dequantize = DequantizationLayer(self.B)
+        self.conv1 = conv5x5(2, 256)
         self.multiConvs = nn.ModuleList()
-        self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
-        self.out_cov = conv3x3(2, 2)
+        # self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
+        self.out_cov = conv3x3(32, 2)
         self.sig = nn.Sigmoid()
 
-        for _ in range(3):
+        self.multiConvs.append(nn.Sequential(
+            conv3x3(256, 128),
+            nn.ReLU()))
+        for _ in range(2):
             self.multiConvs.append(nn.Sequential(
-                conv3x3(2, 8),
-                nn.ReLU(),
-                conv3x3(8, 16),
-                nn.ReLU(),
-                conv3x3(16, 2),
+                conv3x3(128, 128),
+                nn.ReLU()))
+        self.multiConvs.append(nn.Sequential(
+            conv3x3(128, 64),
+            nn.ReLU()))
+        for _ in range(2):
+            self.multiConvs.append(nn.Sequential(
+                conv3x3(64, 64),
+                nn.ReLU()))
+        self.multiConvs.append(nn.Sequential(
+            conv3x3(64, 32),
+            nn.ReLU()))
+        for _ in range(2):
+            self.multiConvs.append(nn.Sequential(
+                conv3x3(32, 32),
                 nn.ReLU()))
 
     def forward(self, x):
-        out = self.dequantize(x)
-        out = out.view(-1, int(self.feedback_bits / self.B))
-        out = self.sig(self.fc(out))
-        out = out.view(-1, 2, 16, 32)
-        for i in range(3):
-            residual = out
+        out = self.dequantize(x)        # 2080 4096
+        # out = out.view(-1, int(self.feedback_bits / self.B))
+        # out = self.sig(self.fc(out))
+        out = out.view(-1, 2, 16, 32)  # 2080 1024
+        out = F.relu(self.conv1(out))   # 65 64 16 32
+        for i in range(9):              # 65 256 14 30
             out = self.multiConvs[i](out)
-            out = residual + out
 
         out = self.out_cov(out)
         out = self.sig(out)
