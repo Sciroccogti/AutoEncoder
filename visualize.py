@@ -28,6 +28,6 @@ print('Drawing model ...')
 test_data = torch.rand(1, img_channels, img_height, img_width).cuda()
 y = model(test_data)
 g = make_dot(y)
-g.render('Linear-Convolutional_model', view=False)
+g.render('Circular-Convolutional_model', view=False)
 
 print('Graph drawn!')
