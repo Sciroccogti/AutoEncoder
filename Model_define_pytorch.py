@@ -102,13 +102,13 @@ class DequantizationLayer(nn.Module):
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=1, bias=True)
+                     padding=1, bias=True, padding_mode='circular')
 
 
 def conv5x5(in_planes, out_planes, stride=1):
     """5x5 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=5, stride=stride,
-                     padding=2, bias=True)
+                     padding=2, bias=True, padding_mode='circular')
 
 
 class Encoder(nn.Module):
