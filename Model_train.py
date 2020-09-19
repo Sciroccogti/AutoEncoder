@@ -17,7 +17,7 @@ from Model_define_pytorch import AutoEncoder, DatasetFolder
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 use_single_gpu = True  # select whether using single gpu or multiple gpus
 torch.manual_seed(1)
-batch_size = 128
+batch_size = 400
 epochs = 1000
 learning_rate = 1e-3
 num_workers = 4
