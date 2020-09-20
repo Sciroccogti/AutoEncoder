@@ -110,49 +110,10 @@ def conv3x3(in_planes, out_planes, stride=1):
                      padding=1, bias=True)
 
 
-class ConvBN(nn.Sequential):
-    def __init__(self, in_planes, out_planes, kernel_size, stride=1, groups=1):
-        if not isinstance(kernel_size, int):
-            padding = [(i - 1) // 2 for i in kernel_size]
-        else:
-            padding = (kernel_size - 1) // 2
-        super(ConvBN, self).__init__(OrderedDict([
-            ('conv', nn.Conv2d(in_planes, out_planes, kernel_size, stride,
-                               padding=padding, groups=groups, bias=False)),
-            ('bn', nn.BatchNorm2d(out_planes))
-        ]))
-
-
-class CRBlock(nn.Module):
-    def __init__(self):
-        super(CRBlock, self).__init__()
-        self.path1 = nn.Sequential(OrderedDict([
-            ('conv3x3', ConvBN(32, 32, 3)),
-            ('relu1', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ('conv1x9', ConvBN(32, 32, [1, 9])),
-            ('relu2', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ('conv9x1', ConvBN(32, 32, [9, 1])),
-        ]))
-        self.path2 = nn.Sequential(OrderedDict([
-            ('conv1x5', ConvBN(32, 32, [1, 5])),
-            ('relu', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ('conv5x1', ConvBN(32, 32, [5, 1])),
-        ]))
-        self.conv1x1 = ConvBN(32 * 2, 32, 1)
-        self.identity = nn.Identity()
-        self.relu = nn.LeakyReLU(negative_slope=0.3, inplace=True)
-
-    def forward(self, x):
-        identity = self.identity(x)
-
-        out1 = self.path1(x)
-        out2 = self.path2(x)
-        out = torch.cat((out1, out2), dim=1)
-        out = self.relu(out)
-        out = self.conv1x1(out)
-
-        out = self.relu(out + identity)
-        return out
+def conv5x5(in_planes, out_planes, stride=1):
+    """5x5 convolution with padding"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=5, stride=stride,
+                     padding=2, bias=True)
 
 
 class Encoder(nn.Module):
@@ -160,37 +121,21 @@ class Encoder(nn.Module):
 
     def __init__(self, feedback_bits, quantization=True):
         super(Encoder, self).__init__()
-        self.encoder1 = nn.Sequential(OrderedDict([
-            ("conv3x3_bn", ConvBN(2, 32, 3)),
-            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv1x9_bn", ConvBN(32, 32, [1, 9])),
-            ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv9x1_bn", ConvBN(32, 32, [9, 1])),
-        ]))
-        self.encoder2 = ConvBN(2, 32, 3)
-        self.encoder_conv = nn.Sequential(OrderedDict([
-            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv1x1_bn", ConvBN(32*2, 2, 1)),
-            ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-        ]))
-
-        self.fc = nn.Linear(1024, int(feedback_bits / self.B))
-        self.sig = nn.Sigmoid()
+        self.conv1 = conv5x5(2, 256)
+        self.conv2 = conv5x5(256, 128)
+        self.conv3 = conv5x5(128, 64)
+        self.conv4 = conv3x3(64, 2)
         self.quantize = QuantizationLayer(self.B)
         self.quantization = quantization 
 
     def forward(self, x):
-        encode1 = self.encoder1(x)
-        encode2 = self.encoder2(x)
-        out = torch.cat((encode1, encode2), dim=1)
-        out = self.encoder_conv(out)
+        out = F.relu(self.conv1(x))
+        out = F.relu(self.conv2(out))
+        out = F.relu(self.conv3(out))
+        out = self.conv4(out)
         out = out.view(-1, 1024)
-        out = self.fc(out)
-        out = self.sig(out)
-        if self.quantization:
-            out = self.quantize(out)
-        else:
-            out = out
+        out = self.quantize(out)
+
         return out
 
 
@@ -201,27 +146,43 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.feedback_bits = feedback_bits
         self.dequantize = DequantizationLayer(self.B)
-        self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
-        decoder = OrderedDict([
-            ("conv5x5_bn", ConvBN(2, 32, 5)),
-            ("relu", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("CRBlock1", CRBlock()),
-            ("CRBlock2", CRBlock()),
-        ])
-        self.decoder_feature = nn.Sequential(decoder)
+        self.conv1 = conv5x5(2, 256)
+        self.multiConvs = nn.ModuleList()
+        # self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
         self.out_cov = conv3x3(32, 2)
         self.sig = nn.Sigmoid()
-        self.quantization = quantization        
+
+        self.multiConvs.append(nn.Sequential(
+            conv3x3(256, 128),
+            nn.ReLU()))
+        for _ in range(2):
+            self.multiConvs.append(nn.Sequential(
+                conv3x3(128, 128),
+                nn.ReLU()))
+        self.multiConvs.append(nn.Sequential(
+            conv3x3(128, 64),
+            nn.ReLU()))
+        for _ in range(2):
+            self.multiConvs.append(nn.Sequential(
+                conv3x3(64, 64),
+                nn.ReLU()))
+        self.multiConvs.append(nn.Sequential(
+            conv3x3(64, 32),
+            nn.ReLU()))
+        for _ in range(2):
+            self.multiConvs.append(nn.Sequential(
+                conv3x3(32, 32),
+                nn.ReLU()))
 
     def forward(self, x):
-        if self.quantization:
-            out = self.dequantize(x)
-        else:
-            out = x
-        out = out.view(-1, int(self.feedback_bits / self.B))
-        out = self.fc(out)
-        out = out.view(-1, 2, 16, 32)
-        out = self.decoder_feature(out)
+        out = self.dequantize(x)        # 2080 4096
+        # out = out.view(-1, int(self.feedback_bits / self.B))
+        # out = self.sig(self.fc(out))
+        out = out.view(-1, 2, 16, 32)  # 2080 1024
+        out = F.relu(self.conv1(out))   # 65 64 16 32
+        for i in range(9):              # 65 256 14 30
+            out = self.multiConvs[i](out)
+
         out = self.out_cov(out)
         out = self.sig(out)
         return out
