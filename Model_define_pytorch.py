@@ -11,9 +11,9 @@ github.com/seefun | kaggle.com/seefun
 import numpy as np
 import torch.nn as nn
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 from collections import OrderedDict
+import torch.nn.functional as F
 
 
 # This part implement the quantization and dequantization operations.
@@ -125,6 +125,8 @@ class Encoder(nn.Module):
         self.conv2 = conv5x5(256, 128)
         self.conv3 = conv5x5(128, 64)
         self.conv4 = conv3x3(64, 2)
+        self.fc = nn.Linear(1024, int(feedback_bits / self.B))
+        self.sig = nn.Sigmoid()
         self.quantize = QuantizationLayer(self.B)
         self.quantization = quantization
 
@@ -134,10 +136,11 @@ class Encoder(nn.Module):
         out = F.relu(self.conv3(out))
         out = self.conv4(out)
         out = out.view(-1, 1024)
+        out = self.fc(out)
+        out = self.sig(out)
         if self.quantization:
             out = self.quantize(out)
-        else:
-            out = out
+
         return out
 
 
@@ -150,6 +153,7 @@ class Decoder(nn.Module):
         self.dequantize = DequantizationLayer(self.B)
         self.conv1 = conv5x5(2, 256)
         self.multiConvs = nn.ModuleList()
+        self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
         self.out_cov = conv3x3(32, 2)
         self.sig = nn.Sigmoid()
         self.quantization = quantization
@@ -181,9 +185,11 @@ class Decoder(nn.Module):
             out = self.dequantize(x)
         else:
             out = x
-        out = out.view(-1, 2, 16, 32)  # 2080 1024
-        out = F.relu(self.conv1(out))   # 65 64 16 32
-        for i in range(9):              # 65 256 14 30
+        out = out.view(-1, int(self.feedback_bits / self.B))
+        out = self.sig(self.fc(out))
+        out = out.view(-1, 2, 16, 32)
+        out = F.relu(self.conv1(out))
+        for i in range(9):
             out = self.multiConvs[i](out)
 
         out = self.out_cov(out)
