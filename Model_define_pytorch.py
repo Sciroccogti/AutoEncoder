@@ -71,11 +71,11 @@ class Dequantization(torch.autograd.Function):
         # return as many input gradients as there were arguments.
         # Gradients of non-Tensor arguments to forward must be None.
         # repeat the gradient of a Num for four time.
-        b, c = grad_output.shape
-        grad_output = grad_output.unsqueeze(2) / ctx.constant
-        grad_bit = grad_output.expand(b, c, ctx.constant)
-        return torch.reshape(grad_bit, (-1, c * ctx.constant)), None
-
+        #b, c = grad_output.shape
+        #grad_bit = grad_output.repeat(1, 1, ctx.constant) 
+        #return torch.reshape(grad_bit, (-1, c * ctx.constant)), None
+        grad_bit = grad_output.repeat_interleave(ctx.constant, dim=1)
+        return grad_bit, None
 
 class QuantizationLayer(nn.Module):
 
@@ -225,6 +225,28 @@ def NMSE(x, x_hat):
     nmse = np.mean(mse / power)
     return nmse
 
+def NMSE_cuda(x, x_hat):
+    x_real = x[:, 0, :, :].view(len(x),-1) - 0.5
+    x_imag = x[:, 1, :, :].view(len(x),-1) - 0.5
+    x_hat_real = x_hat[:, 0, :, :].view(len(x_hat), -1) - 0.5
+    x_hat_imag = x_hat[:, 1, :, :].view(len(x_hat), -1) - 0.5
+    power = torch.sum(x_real**2 + x_imag**2, axis=1)
+    mse = torch.sum((x_real-x_hat_real)**2 + (x_imag-x_hat_imag)**2, axis=1)
+    nmse = mse/power
+    return nmse
+    
+class NMSELoss(nn.Module):
+    def __init__(self, reduction='sum'):
+        super(NMSELoss, self).__init__()
+        self.reduction = reduction
+
+    def forward(self, x_hat, x):
+        nmse = NMSE_cuda(x, x_hat)
+        if self.reduction == 'mean':
+            nmse = torch.mean(nmse) 
+        else:
+            nmse = torch.sum(nmse)
+        return nmse
 
 def Score(NMSE):
     score = 1 - NMSE
@@ -237,8 +259,8 @@ class DatasetFolder(Dataset):
     def __init__(self, matData):
         self.matdata = matData
 
-    def __getitem__(self, index):
-        return self.matdata[index]
-
     def __len__(self):
         return self.matdata.shape[0]
+    
+    def __getitem__(self, index):
+        return self.matdata[index]
