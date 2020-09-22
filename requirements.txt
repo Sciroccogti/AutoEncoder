@@ -1,4 +1,5 @@
 h5py>=2.7.1
 numpy>=1.13.3
-torch==1.2.0
+torch>=1.5.0
 torchviz>=0.0.1
+visdom==0.1.8.9
