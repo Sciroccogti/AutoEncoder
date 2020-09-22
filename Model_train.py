@@ -105,7 +105,7 @@ for epoch in range(startepoch, epochs):
     print('lr:%.4e' % optimizer.param_groups[0]['lr'])
     # model training
     model.train()
-    if epoch < epochs//10:
+    if epoch < 0 :#epochs//10:
         try:
             model.encoder.quantization = False
             model.decoder.quantization = False
@@ -129,9 +129,9 @@ for epoch in range(startepoch, epochs):
         output = model(input)
 
         loss = criterion(output, input)
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        optimizer.zero_grad()
 
         if i % print_freq == 0:
             print('Epoch: [{0}][{1}/{2}]\t'
@@ -151,7 +151,7 @@ for epoch in range(startepoch, epochs):
             # convert numpy to Tensor
             input = input.cuda()
             output = model(input)
-            total_loss += criterion_test(output, input).item() * input.size(0)
+            total_loss += criterion_test(output, input).item()
         average_loss = total_loss / len(test_dataset)
         if use_vis:
             viz.line(Y=np.array([average_loss]), X=np.array(
