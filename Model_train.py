@@ -9,9 +9,8 @@ import random
 import h5py
 import numpy as np
 import torch
-import torch.nn as nn
-from Model_define_pytorch import (AutoEncoder, DatasetFolder, NMSE_cuda,
-                                  NMSELoss)
+from Model_define_pytorch import (AutoEncoder, DatasetFolder, NMSELoss)
+import visdom
 
 # Parameters for training
 gpu_list = '0'
@@ -30,7 +29,7 @@ def seed_everything(seed=42):
 SEED = 42
 seed_everything(SEED)
 
-batch_size = 256
+batch_size = 1024
 epochs = 100
 learning_rate = 2e-3  # bigger to train faster
 num_workers = 4
@@ -42,12 +41,29 @@ img_height = 16
 img_width = 32
 img_channels = 2
 
+resume = 'Modelsave/'
+# resume = None
+use_vis = True
 
 # Model construction
 model = AutoEncoder(feedback_bits)
+startepoch = 0
 
 model.encoder.quantization = False
 model.decoder.quantization = False
+
+best_loss = 100
+
+if resume is not None:
+    checkpoint_encoder = torch.load(resume + 'encoder.pth.tar')
+    checkpoint_decoder = torch.load(resume + 'decoder.pth.tar')
+    # startepoch = checkpoint_encoder['epoch'] + 1
+    startepoch = 36
+    # best_loss = checkpoint_encoder['best']
+    model.encoder.load_state_dict(checkpoint_encoder['state_dict'])
+    model.decoder.load_state_dict(checkpoint_decoder['state_dict'])
+    print('checkpoint loaded!')
+
 
 if len(gpu_list.split(',')) > 1:
     model = torch.nn.DataParallel(model).cuda()  # model.module
@@ -80,8 +96,12 @@ train_loader = torch.utils.data.DataLoader(
 test_dataset = DatasetFolder(x_test)
 test_loader = torch.utils.data.DataLoader(
     test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-best_loss = 100
-for epoch in range(epochs):
+
+if use_vis:
+    viz = visdom.Visdom(env='train')
+    loss_win = viz.line(np.arange(1), opts={'title': 'loss'})
+
+for epoch in range(startepoch, epochs):
     print('========================')
     print('lr:%.4e' % optimizer.param_groups[0]['lr'])
     # model training
@@ -118,6 +138,7 @@ for epoch in range(epochs):
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Loss {loss:.4f}\t'.format(
                       epoch, i, len(train_loader), loss=loss.item()))
+
     model.eval()
     try:
         model.encoder.quantization = True
@@ -133,13 +154,16 @@ for epoch in range(epochs):
             output = model(input)
             total_loss += criterion_test(output, input).item()
         average_loss = total_loss / len(test_dataset)
+        if use_vis:
+            viz.line(Y=np.array([average_loss]), X=np.array(
+                [epoch]), win=loss_win, update='append')
         print('NMSE %.4f' % average_loss)
         if average_loss < best_loss:
             # model save
             # save encoder
             modelSave1 = './Modelsave/encoder.pth.tar'
             torch.save(
-                {'state_dict': model.encoder.state_dict(), }, modelSave1)
+                {'state_dict': model.encoder.state_dict(), 'epoch': epoch, 'best': average_loss}, modelSave1)
             # save decoder
             modelSave2 = './Modelsave/decoder.pth.tar'
             torch.save(
