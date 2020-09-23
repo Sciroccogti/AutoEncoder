@@ -47,6 +47,7 @@ use_vis = True
 
 # Model construction
 model = AutoEncoder(feedback_bits)
+print(model)
 startepoch = 0
 
 model.encoder.quantization = False
