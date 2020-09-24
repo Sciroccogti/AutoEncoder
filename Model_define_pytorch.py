@@ -4,10 +4,15 @@ This is the template code for 2020 NIAC https://naic.pcl.ac.cn/.
 The code is based on the sample code with tensorflow for 2020 NIAC and it can only run with GPUS.
 If you have any questions, please contact me with https://github.com/xufana7/AutoEncoder-with-pytorch
 Author, Fan xu Aug 2020
+
+changed by seefun Aug 2020 
+github.com/seefun | kaggle.com/seefun
 """
+from collections import OrderedDict
+
 import numpy as np
-import torch.nn as nn
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
@@ -31,7 +36,7 @@ def Num2Bit(Num, B):
 
 def Bit2Num(Bit, B):
     Bit_ = Bit.type(torch.float32)
-    Bit_ = torch.reshape(Bit_, [-1, Bit_.shape[1] // B, B])
+    Bit_ = torch.reshape(Bit_, [-1, int(Bit_.shape[1] / B), B])
     num = torch.zeros(Bit_[:, :, 1].shape).cuda()
     for i in range(B):
         num = num + Bit_[:, :, i] * 2 ** (B - 1 - i)
@@ -71,10 +76,11 @@ class Dequantization(torch.autograd.Function):
         # return as many input gradients as there were arguments.
         # Gradients of non-Tensor arguments to forward must be None.
         # repeat the gradient of a Num for four time.
-        b, c = grad_output.shape
-        grad_output = grad_output.unsqueeze(2) / ctx.constant
-        grad_bit = grad_output.expand(b, c, ctx.constant)
-        return torch.reshape(grad_bit, (-1, c * ctx.constant)), None
+        #b, c = grad_output.shape
+        #grad_bit = grad_output.repeat(1, 1, ctx.constant)
+        # return torch.reshape(grad_bit, (-1, c * ctx.constant)), None
+        grad_bit = grad_output.repeat_interleave(ctx.constant, dim=1)
+        return grad_bit, None
 
 
 class QuantizationLayer(nn.Module):
@@ -111,24 +117,44 @@ def conv5x5(in_planes, out_planes, stride=1):
                      padding=2, bias=True, padding_mode='circular')
 
 
+class ConvBN(nn.Sequential):
+    def __init__(self, in_planes, out_planes, kernel_size, stride=1, groups=1):
+        if not isinstance(kernel_size, int):
+            padding = [(i - 1) // 2 for i in kernel_size]
+        else:
+            padding = (kernel_size - 1) // 2
+        super(ConvBN, self).__init__(OrderedDict([
+            ('conv', nn.Conv2d(in_planes, out_planes, kernel_size, stride,
+                               padding=padding, groups=groups, bias=False)),
+            ('bn', nn.BatchNorm2d(out_planes))
+        ]))
+
+
 class Encoder(nn.Module):
     B = 4
 
-    def __init__(self, feedback_bits):
+    def __init__(self, feedback_bits, quantization=True):
         super(Encoder, self).__init__()
-        self.conv1 = conv5x5(2, 256)
-        self.conv2 = conv5x5(256, 128)
-        self.conv3 = conv5x5(128, 64)
-        self.conv4 = conv3x3(64, 2)
+        self.conv1 = ConvBN(2, 256, 5)
+        self.conv2 = ConvBN(256, 128, 5)
+        self.conv3 = ConvBN(128, 64, 5)
+        self.conv4 = ConvBN(64, 2, 3)
+        self.relu = nn.LeakyReLU(negative_slope=0.3, inplace=True)
+        self.fc = nn.Linear(1024, int(feedback_bits / self.B))
+        self.sig = nn.Sigmoid()
         self.quantize = QuantizationLayer(self.B)
+        self.quantization = quantization
 
     def forward(self, x):
-        out = F.relu(self.conv1(x))
-        out = F.relu(self.conv2(out))
-        out = F.relu(self.conv3(out))
+        out = self.relu(self.conv1(x))
+        out = self.relu(self.conv2(out))
+        out = self.relu(self.conv3(out))
         out = self.conv4(out)
         out = out.view(-1, 1024)
-        out = self.quantize(out)
+        out = self.fc(out)
+        out = self.sig(out)
+        if self.quantization:
+            out = self.quantize(out)
 
         return out
 
@@ -136,45 +162,36 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     B = 4
 
-    def __init__(self, feedback_bits):
+    def __init__(self, feedback_bits, quantization=True):
         super(Decoder, self).__init__()
         self.feedback_bits = feedback_bits
         self.dequantize = DequantizationLayer(self.B)
-        self.conv1 = conv5x5(2, 256)
-        self.multiConvs = nn.ModuleList()
-        # self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
+        self.relu = nn.LeakyReLU(negative_slope=0.3, inplace=True)
+        self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
         self.out_cov = conv3x3(32, 2)
         self.sig = nn.Sigmoid()
-
-        self.multiConvs.append(nn.Sequential(
-            conv3x3(256, 128),
-            nn.ReLU()))
-        for _ in range(2):
-            self.multiConvs.append(nn.Sequential(
-                conv3x3(128, 128),
-                nn.ReLU()))
-        self.multiConvs.append(nn.Sequential(
-            conv3x3(128, 64),
-            nn.ReLU()))
-        for _ in range(2):
-            self.multiConvs.append(nn.Sequential(
-                conv3x3(64, 64),
-                nn.ReLU()))
-        self.multiConvs.append(nn.Sequential(
-            conv3x3(64, 32),
-            nn.ReLU()))
-        for _ in range(2):
-            self.multiConvs.append(nn.Sequential(
-                conv3x3(32, 32),
-                nn.ReLU()))
+        self.multiConvs = nn.Sequential(
+            ConvBN(2, 256, 5), self.relu,
+            ConvBN(256, 128, 3), self.relu,
+            ConvBN(128, 128, 3), self.relu,
+            ConvBN(128, 64, 3), self.relu,
+            ConvBN(64, 64, 3), self.relu,
+            ConvBN(64, 64, 3), self.relu,
+            ConvBN(64, 32, 3), self.relu,
+            ConvBN(32, 32, 3), self.relu,
+            # ConvBN(32, 2, 3), self.sig
+        )
+        self.quantization = quantization
 
     def forward(self, x):
-        out = self.dequantize(x)        # 2080 4096
-        # out = out.view(-1, int(self.feedback_bits / self.B))
-        # out = self.sig(self.fc(out))
-        out = out.view(-1, 2, 16, 32)  # 2080 1024
-        out = F.relu(self.conv1(out))   # 65 64 16 32
-        for i in range(9):              # 65 256 14 30
+        if self.quantization:
+            out = self.dequantize(x)
+        else:
+            out = x
+        out = out.view(-1, int(self.feedback_bits / self.B))
+        out = self.fc(out)
+        out = out.view(-1, 2, 16, 32)
+        for i in range(16):
             out = self.multiConvs[i](out)
 
         out = self.out_cov(out)
@@ -210,6 +227,31 @@ def NMSE(x, x_hat):
     return nmse
 
 
+def NMSE_cuda(x, x_hat):
+    x_real = x[:, 0, :, :].view(len(x), -1) - 0.5
+    x_imag = x[:, 1, :, :].view(len(x), -1) - 0.5
+    x_hat_real = x_hat[:, 0, :, :].view(len(x_hat), -1) - 0.5
+    x_hat_imag = x_hat[:, 1, :, :].view(len(x_hat), -1) - 0.5
+    power = torch.sum(x_real**2 + x_imag**2, axis=1)
+    mse = torch.sum((x_real-x_hat_real)**2 + (x_imag-x_hat_imag)**2, axis=1)
+    nmse = mse/power
+    return nmse
+
+
+class NMSELoss(nn.Module):
+    def __init__(self, reduction='sum'):
+        super(NMSELoss, self).__init__()
+        self.reduction = reduction
+
+    def forward(self, x_hat, x):
+        nmse = NMSE_cuda(x, x_hat)
+        if self.reduction == 'mean':
+            nmse = torch.mean(nmse)
+        else:
+            nmse = torch.sum(nmse)
+        return nmse
+
+
 def Score(NMSE):
     score = 1 - NMSE
     return score
@@ -221,8 +263,8 @@ class DatasetFolder(Dataset):
     def __init__(self, matData):
         self.matdata = matData
 
-    def __getitem__(self, index):
-        return self.matdata[index]
-
     def __len__(self):
         return self.matdata.shape[0]
+
+    def __getitem__(self, index):
+        return self.matdata[index]
